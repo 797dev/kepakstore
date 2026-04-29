@@ -32,6 +32,10 @@ class AdminState(StatesGroup):
     waiting_for_broadcast = State()
     waiting_for_price = State()
 
+class SteamState(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_id = State()
+
 # ==========================================
 # 3. MA'LUMOTLAR BAZASI
 # ==========================================
@@ -59,13 +63,22 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS cart (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT,
-                product_id INTEGER
+                product_id INTEGER,
+                custom_name TEXT,
+                custom_price INTEGER
             )
         ''')
         
-        # Eski ro'yxatni tozalab, to'liq ro'yxatni kiritish
+        # Savat jadvaliga yangi ustunlarni qo'shish (dinamik Steam kiritish uchun)
+        try:
+            await conn.execute("ALTER TABLE cart ADD COLUMN IF NOT EXISTS custom_name TEXT")
+            await conn.execute("ALTER TABLE cart ADD COLUMN IF NOT EXISTS custom_price INTEGER")
+        except:
+            pass
+        
+        # Mahsulotlarni tekshirish va yangilash (Mutolaa yangi narxlari bilan)
         count = await conn.fetchval("SELECT COUNT(*) FROM products")
-        if count < 20: 
+        if count < 30: 
             await conn.execute("DELETE FROM products")
             
             defaults = [
@@ -108,15 +121,15 @@ async def init_db():
                 ('gift', '💎 100 ⭐️', 22000),
                 ('gift', '🏆 100 ⭐️', 22000),
                 ('gift', '💍 100 ⭐️', 22000),
-                # Boshqalar
-                ('mutolaa', 'Mutolaa 1 oy', 40000),
-                ('steam', 'Steam Balans ($10)', 130000)
+                # Mutolaa
+                ('mutolaa', 'Mutolaa 1 oy', 34000),
+                ('mutolaa', 'Mutolaa 1 yil', 156000)
             ]
             for cat, name, price in defaults:
                 await conn.execute("INSERT INTO products (category, name, price) VALUES ($1, $2, $3)", cat, name, price)
 
 # ==========================================
-# 4. TUGMALAR (Reply va Inline)
+# 4. TUGMALAR
 # ==========================================
 def get_main_menu():
     return ReplyKeyboardMarkup(
@@ -148,11 +161,23 @@ def withdraw_keyboard():
         [InlineKeyboardButton(text="💳 Pulni yechib olish", callback_data="withdraw_funds")]
     ])
 
+def cancel_steam_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🔙 Bekor qilish")]],
+        resize_keyboard=True
+    )
+
 # ==========================================
-# 5. ASOSIY MANTIQ (Foydalanuvchi)
+# 5. ASOSIY MANTIQ 
 # ==========================================
+@dp.message(F.text.in_({"🔙 Asosiy Menyu", "🔙 Bekor qilish"}))
+async def back_to_main(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Asosiy menyuga qaytdingiz.", reply_markup=get_main_menu())
+
 @dp.message(CommandStart())
-async def cmd_start(message: Message, command: CommandObject):
+async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
     username = message.from_user.username
     
@@ -178,18 +203,16 @@ async def cmd_start(message: Message, command: CommandObject):
     text = f"Assalomu alaykum, <b>{message.from_user.first_name}</b>!\n\nKepak Store botiga xush kelibsiz."
     await message.answer(text, reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
-@dp.message(F.text == "🔙 Asosiy Menyu")
-async def back_to_main(message: Message):
-    await message.answer("Asosiy menyuga qaytdingiz.", reply_markup=get_main_menu())
-
 @dp.message(F.text == "📞 Aloqa")
-async def contact_admin(message: Message):
+async def contact_admin(message: Message, state: FSMContext):
+    await state.clear()
     text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/admin_havola'>Adminga yozish</a></b>"
     await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-# --- Katalog ---
+# --- Katalog (Oddiy mahsulotlar) ---
 @dp.message(F.text == "🛒 Katalog")
-async def show_catalog(message: Message):
+async def show_catalog(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer("Qaysi bo'limdan xarid qilasiz?", reply_markup=get_categories_menu())
 
 CATEGORY_MAP = {
@@ -197,8 +220,7 @@ CATEGORY_MAP = {
     "⭐ Stars": "stars",
     "🖼️ NFT": "nft",
     "🎁 Giftlar": "gift",
-    "📚 Mutolaa Premium": "mutolaa",
-    "🎮 Steam Balans": "steam"
+    "📚 Mutolaa Premium": "mutolaa"
 }
 
 @dp.message(F.text.in_(CATEGORY_MAP.keys()))
@@ -241,14 +263,62 @@ async def add_to_cart(call: CallbackQuery):
         await conn.execute("INSERT INTO cart (user_id, product_id) VALUES ($1, $2)", call.from_user.id, product_id)
     await call.answer("✅ Savatga qo'shildi! Xaridni yakunlash uchun 'Savatim' bo'limiga o'ting.", show_alert=True)
 
+# --- Katalog (STEAM MAXSUS MANTIQ) ---
+@dp.message(F.text == "🎮 Steam Balans")
+async def steam_start(message: Message, state: FSMContext):
+    text = (
+        "🎮 <b>Steam balansni to'ldirish</b>\n\n"
+        "Komissiya xizmatlari bilan birga <b>$10 = 130,000 so'm</b> etib belgilangan ($1 = 13,000 so'm).\n\n"
+        "⬇️ <i>Steam balansingizni necha dollarga to'ldirmoqchisiz? Faqat raqam kiriting (masalan: 10):</i>"
+    )
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=cancel_steam_keyboard())
+    await state.set_state(SteamState.waiting_for_amount)
+
+@dp.message(SteamState.waiting_for_amount)
+async def steam_amount(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("⚠️ Iltimos, faqat raqam kiriting (masalan: 10):")
+        return
+    amount = int(message.text)
+    price_uzs = amount * 13000
+    await state.update_data(steam_amount=amount, steam_price=price_uzs)
+    
+    await message.answer(
+        f"💵 Kiritilgan miqdor: <b>${amount}</b> ({price_uzs:,} so'm)\n\n"
+        "👤 <b>Endi Steam IDsini yozib qoldiring:</b>",
+        parse_mode=ParseMode.HTML
+    )
+    await state.set_state(SteamState.waiting_for_id)
+
+@dp.message(SteamState.waiting_for_id)
+async def steam_id(message: Message, state: FSMContext):
+    steam_id_text = message.text
+    data = await state.get_data()
+    amount = data['steam_amount']
+    price = data['steam_price']
+    
+    custom_name = f"Steam ${amount} (ID: {steam_id_text})"
+    
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO cart (user_id, product_id, custom_name, custom_price) VALUES ($1, NULL, $2, $3)",
+            message.from_user.id, custom_name, price
+        )
+        
+    await message.answer("✅ Steam balansi savatga qo'shildi! To'lov qilish uchun 'Savatim' bo'limiga o'ting.", reply_markup=get_main_menu())
+    await state.clear()
+
 # --- Savat va To'lov ---
 @dp.message(F.text == "🛍️ Savatim")
 async def show_cart(message: Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
     async with db_pool.acquire() as conn:
         items = await conn.fetch('''
-            SELECT p.name, p.price FROM cart c
-            JOIN products p ON c.product_id = p.id
+            SELECT COALESCE(p.name, c.custom_name) as name, 
+                   COALESCE(p.price, c.custom_price) as price 
+            FROM cart c
+            LEFT JOIN products p ON c.product_id = p.id
             WHERE c.user_id = $1
         ''', user_id)
     
@@ -299,7 +369,8 @@ async def process_receipt(message: Message, state: FSMContext):
 
 # --- Kabinet, Pul yechish va Hamkorlik ---
 @dp.message(F.text == "👤 Kabinet")
-async def show_cabinet(message: Message):
+async def show_cabinet(message: Message, state: FSMContext):
+    await state.clear()
     async with db_pool.acquire() as conn:
         balance = await conn.fetchval("SELECT balance FROM users WHERE user_id = $1", message.from_user.id)
     text = (
@@ -346,7 +417,8 @@ async def process_withdraw(message: Message, state: FSMContext):
     await state.clear()
 
 @dp.message(F.text == "🤝 Hamkorlik")
-async def show_affiliate(message: Message):
+async def show_affiliate(message: Message, state: FSMContext):
+    await state.clear()
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={message.from_user.id}"
     await message.answer(
@@ -360,7 +432,8 @@ async def show_affiliate(message: Message):
 # 6. ADMIN PANEL
 # ==========================================
 @dp.message(Command("admin"))
-async def admin_panel(message: Message):
+async def admin_panel(message: Message, state: FSMContext):
+    await state.clear()
     if message.from_user.id != ADMIN_ID:
         return
     await message.answer("👨‍💻 <b>Admin Panel</b>\n\nKerakli bo'limni tanlang:", reply_markup=admin_panel_keyboard(), parse_mode=ParseMode.HTML)
