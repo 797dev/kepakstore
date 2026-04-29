@@ -63,10 +63,10 @@ async def init_db():
             )
         ''')
         
-        # DIQQAT: Eski xato ro'yxatni tozalab, yangisini majburiy kiritamiz
+        # Eski ro'yxatni tozalab, to'liq ro'yxatni kiritish
         count = await conn.fetchval("SELECT COUNT(*) FROM products")
-        if count < 20: # Agar bazada to'liq ro'yxat bo'lmasa (eski ro'yxatda atigi 7 ta edi)
-            await conn.execute("DELETE FROM products") # Eskilarni o'chirib tashlaymiz
+        if count < 20: 
+            await conn.execute("DELETE FROM products")
             
             defaults = [
                 # Premium
@@ -116,7 +116,7 @@ async def init_db():
                 await conn.execute("INSERT INTO products (category, name, price) VALUES ($1, $2, $3)", cat, name, price)
 
 # ==========================================
-# 4. TUGMALAR (Reply)
+# 4. TUGMALAR (Reply va Inline)
 # ==========================================
 def get_main_menu():
     return ReplyKeyboardMarkup(
@@ -143,6 +143,11 @@ def admin_panel_keyboard():
         [InlineKeyboardButton(text="⚙️ Narxlarni tahrirlash", callback_data="admin_prices")]
     ])
 
+def withdraw_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Pulni yechib olish", callback_data="withdraw_funds")]
+    ])
+
 # ==========================================
 # 5. ASOSIY MANTIQ (Foydalanuvchi)
 # ==========================================
@@ -164,6 +169,11 @@ async def cmd_start(message: Message, command: CommandObject):
                 "INSERT INTO users (user_id, username, referrer_id) VALUES ($1, $2, $3)",
                 user_id, username, referrer_id
             )
+        else:
+            if referrer_id:
+                current_ref = await conn.fetchval("SELECT referrer_id FROM users WHERE user_id = $1", user_id)
+                if not current_ref:
+                    await conn.execute("UPDATE users SET referrer_id = $1 WHERE user_id = $2", referrer_id, user_id)
 
     text = f"Assalomu alaykum, <b>{message.from_user.first_name}</b>!\n\nKepak Store botiga xush kelibsiz."
     await message.answer(text, reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
@@ -174,10 +184,10 @@ async def back_to_main(message: Message):
 
 @dp.message(F.text == "📞 Aloqa")
 async def contact_admin(message: Message):
-    text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/admin_link_shu_yerga_qoying'>Adminga yozish</a></b>"
+    text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/admin_havola'>Adminga yozish</a></b>"
     await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-# --- Katalog va Kategoriyalar (Bitta Post Mantiqi) ---
+# --- Katalog ---
 @dp.message(F.text == "🛒 Katalog")
 async def show_catalog(message: Message):
     await message.answer("Qaysi bo'limdan xarid qilasiz?", reply_markup=get_categories_menu())
@@ -195,27 +205,23 @@ CATEGORY_MAP = {
 async def show_category_products(message: Message):
     category_slug = CATEGORY_MAP[message.text]
     async with db_pool.acquire() as conn:
-        # id bo'yicha saralash, shunda siz yozgan ketma-ketlikda chiqadi
         products = await conn.fetch("SELECT id, name, price FROM products WHERE category = $1 ORDER BY id", category_slug)
     
     if not products:
         await message.answer("Bu bo'limda hozircha mahsulotlar yo'q.")
         return
 
-    # Matn qismini yig'ish
     text_lines = [f"<b>{message.text}</b>\n"]
     for p in products:
         text_lines.append(f"▪️ <b>{p['name']}</b> — {p['price']:,} so'm")
     
     text = "\n".join(text_lines)
     
-    # NFT bo'limi uchun maxsus xabar
     if category_slug == "nft":
         text += "\n\n<i>Boshqa hamma turdagi NFTlar sizning xohishingizdagi kelishilgan narxda olib beriladi. Buning uchun 'Aloqa' bo'limi orqali admin bilan bog'laning.</i>"
         
     text += "\n\n⬇️ <i>Kerakli mahsulotni tanlang:</i>"
 
-    # Inline tugmalarni 2 tadan qilib taxlash (Grid layout)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
     row = []
     for p in products:
@@ -256,7 +262,10 @@ async def show_cart(message: Message, state: FSMContext):
     text = (
         f"<b>Sizning savatingiz:</b>\n\n{items_text}\n\n"
         f"<b>Jami:</b> {total:,} so'm\n\n"
-        "💳 <i>To'lov qilish uchun chekni (rasm ko'rinishida) yuboring. Karta: 8600 1234 5678 9012</i>"
+        "💳 <i>To'lov qilish uchun quyidagi kartalardan biriga pul o'tkazing va chekni (rasm ko'rinishida) shu yerga yuboring:</i>\n\n"
+        "🟢 <b>Humo:</b> <code>9860 1601 5386 7058</code>\n"
+        "🔵 <b>Uzcard:</b> <code>5614 6822 1669 527</code>\n"
+        "👤 <b>Jaloliddin Alisherov</b>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
     await state.update_data(total=total, items_text=items_text)
@@ -288,19 +297,64 @@ async def process_receipt(message: Message, state: FSMContext):
     await message.answer("✅ Chek qabul qilindi. Admin tasdiqlashi bilan xarid amalga oshadi.", reply_markup=get_main_menu())
     await state.clear()
 
-# --- Kabinet va Hamkorlik ---
+# --- Kabinet, Pul yechish va Hamkorlik ---
 @dp.message(F.text == "👤 Kabinet")
 async def show_cabinet(message: Message):
     async with db_pool.acquire() as conn:
         balance = await conn.fetchval("SELECT balance FROM users WHERE user_id = $1", message.from_user.id)
-    text = f"<b>Kabinetingiz</b>\n\n🆔 ID: <code>{message.from_user.id}</code>\n💰 Balans: <b>{(balance or 0):,} so'm</b>"
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    text = (
+        f"<b>Kabinetingiz</b>\n\n"
+        f"🆔 ID: <code>{message.from_user.id}</code>\n"
+        f"💰 Balans: <b>{(balance or 0):,} so'm</b>\n\n"
+        f"<i>Balansingizdagi mablag'ni karta orqali yechib olishingiz mumkin.</i>"
+    )
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=withdraw_keyboard())
+
+@dp.callback_query(F.data == "withdraw_funds")
+async def ask_for_card(call: CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    async with db_pool.acquire() as conn:
+        balance = await conn.fetchval("SELECT balance FROM users WHERE user_id = $1", user_id)
+    
+    if not balance or balance <= 0:
+        await call.answer("Kechirasiz, balansingizda yetarli mablag' yo'q.", show_alert=True)
+        return
+        
+    await call.message.answer("💳 <b>Karta raqamingizni yuboring (16 ta raqam):</b>", parse_mode=ParseMode.HTML)
+    await state.set_state(WithdrawState.waiting_for_card)
+    await call.answer()
+
+@dp.message(WithdrawState.waiting_for_card)
+async def process_withdraw(message: Message, state: FSMContext):
+    card_number = message.text
+    user_id = message.from_user.id
+    
+    async with db_pool.acquire() as conn:
+        balance = await conn.fetchval("SELECT balance FROM users WHERE user_id = $1", user_id)
+        await conn.execute("UPDATE users SET balance = 0 WHERE user_id = $1", user_id)
+    
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {user_id}"
+    admin_text = (
+        f"💸 <b>Pul yechish so'rovi!</b>\n"
+        f"👤 Mijoz: {username}\n"
+        f"💰 Summa: {balance:,.0f} so'm\n"
+        f"💳 Karta: <code>{card_number}</code>"
+    )
+    
+    await bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode=ParseMode.HTML)
+    await message.answer("✅ So'rov adminga yuborildi. Pul tez orada kartangizga tushirib beriladi.", reply_markup=get_main_menu())
+    await state.clear()
 
 @dp.message(F.text == "🤝 Hamkorlik")
 async def show_affiliate(message: Message):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={message.from_user.id}"
-    await message.answer(f"<b>5% Cashback Dasturi</b>\n\n🔗 Havolangiz:\n<code>{ref_link}</code>", parse_mode=ParseMode.HTML)
+    await message.answer(
+        f"<b>1% Cashback Dasturi</b>\n\n"
+        f"Do'stlaringizni taklif qiling va ular xarid qilgan summadan <b>1% bonus</b> oling.\n\n"
+        f"🔗 Havolangiz:\n<code>{ref_link}</code>", 
+        parse_mode=ParseMode.HTML
+    )
 
 # ==========================================
 # 6. ADMIN PANEL
@@ -368,7 +422,7 @@ async def update_price(message: Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 7. TASDIQLASH MANTIQI
+# 7. TASDIQLASH (1% Bonus) MANTIQI
 # ==========================================
 @dp.callback_query(F.data.startswith("approve_"))
 async def approve_order(call: CallbackQuery):
@@ -378,12 +432,13 @@ async def approve_order(call: CallbackQuery):
     
     await bot.send_message(user_id, "🎉 To'lovingiz tasdiqlandi! Tez orada buyurtmangiz yetkaziladi.")
     
-    bonus = int(amount * 0.05)
+    bonus = int(amount * 0.01) # 1% Cashback hisobi
     async with db_pool.acquire() as conn:
         referrer_id = await conn.fetchval("SELECT referrer_id FROM users WHERE user_id = $1", user_id)
         if referrer_id:
             await conn.execute("UPDATE users SET balance = balance + $1 WHERE user_id = $2", bonus, referrer_id)
             await bot.send_message(referrer_id, f"💸 Taklif qilgan do'stingiz xarid qildi! Balansingizga <b>{bonus:,} so'm</b> qo'shildi.", parse_mode=ParseMode.HTML)
+        
         await conn.execute("DELETE FROM cart WHERE user_id = $1", user_id)
             
     await call.message.edit_caption(caption=f"{call.message.caption}\n\n✅ <b>TASDIQLANGAN</b>", parse_mode=ParseMode.HTML)
