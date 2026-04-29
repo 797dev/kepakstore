@@ -39,7 +39,6 @@ async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL)
     async with db_pool.acquire() as conn:
-        # Foydalanuvchilar
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -48,7 +47,6 @@ async def init_db():
                 referrer_id BIGINT
             )
         ''')
-        # Mahsulotlar (Dinamik narxlar uchun)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY,
@@ -57,7 +55,6 @@ async def init_db():
                 price INTEGER
             )
         ''')
-        # Savat
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS cart (
                 id SERIAL PRIMARY KEY,
@@ -66,23 +63,58 @@ async def init_db():
             )
         ''')
         
-        # Boshlang'ich mahsulotlarni qo'shish (agar bo'sh bo'lsa)
+        # Yangi mahsulotlarni qo'shish (faqat birinchi marta ishga tushganda)
         count = await conn.fetchval("SELECT COUNT(*) FROM products")
         if count == 0:
             defaults = [
-                ('premium', 'Telegram Premium 1 oy', 41990),
-                ('premium', 'Telegram Premium 1 yil', 330000),
-                ('stars', '1000 Stars', 25000),
-                ('nft', 'Premium NFT Fragment', 150000),
-                ('gift', 'Telegram Gift Card', 50000),
-                ('mutolaa', 'Mutolaa Premium', 20000),
-                ('steam', 'Steam Balans ($10)', 125000)
+                # Premium
+                ('premium', 'Premium 1 oy', 41990),
+                ('premium', 'Premium 3 oy', 160000),
+                ('premium', 'Premium 6 oy', 225000),
+                ('premium', 'Premium 12 oy', 370000),
+                # Stars
+                ('stars', '50 Stars', 12500),
+                ('stars', '100 Stars', 25000),
+                ('stars', '200 Stars', 50000),
+                ('stars', '500 Stars', 125000),
+                ('stars', '1000 Stars', 250000),
+                # NFT
+                ('nft', 'Vice cream', 59990),
+                ('nft', 'Ice cream', 59990),
+                ('nft', 'Instant ramen', 59900),
+                ('nft', 'Lunar snake', 79700),
+                ('nft', 'Snake box', 79700),
+                ('nft', 'Xmas stocking', 79700),
+                ('nft', 'Pool float', 79700),
+                ('nft', 'Whip cupcake', 79700),
+                ('nft', 'Candy cane', 79700),
+                ('nft', 'Winter wreath', 79700),
+                ('nft', 'Chill flame', 79700),
+                ('nft', 'Big year', 79700),
+                ('nft', 'Hypno lollipop', 79700),
+                ('nft', 'Mood pack', 79700),
+                ('nft', 'Holiday drink', 79700),
+                ('nft', 'Lol pop', 79700),
+                # Gift (Telegram sovg'alari)
+                ('gift', '🧸 15 ⭐️', 4000),
+                ('gift', '🎁 25 ⭐️', 6000),
+                ('gift', '🌹 25 ⭐️', 6000),
+                ('gift', '🎂 50 ⭐️', 13000),
+                ('gift', '🚀 50 ⭐️', 13000),
+                ('gift', '🍾 50 ⭐️', 13000),
+                ('gift', '💐 50 ⭐️', 13000),
+                ('gift', '💎 100 ⭐️', 22000),
+                ('gift', '🏆 100 ⭐️', 22000),
+                ('gift', '💍 100 ⭐️', 22000),
+                # Boshqalar (Ixtiyoriy oldingi toifalar qoldirildi, xohlasangiz olib tashlaysiz)
+                ('mutolaa', 'Mutolaa 1 oy', 38000),
+                ('steam', 'Steam Balans ($10)', 130000)
             ]
             for cat, name, price in defaults:
                 await conn.execute("INSERT INTO products (category, name, price) VALUES ($1, $2, $3)", cat, name, price)
 
 # ==========================================
-# 4. TUGMALAR (Reply & Inline)
+# 4. TUGMALAR (Reply)
 # ==========================================
 def get_main_menu():
     return ReplyKeyboardMarkup(
@@ -102,11 +134,6 @@ def get_categories_menu():
             [KeyboardButton(text="🔙 Asosiy Menyu")]
         ], resize_keyboard=True
     )
-
-def add_to_cart_keyboard(product_id: int):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Savatga qo'shish", callback_data=f"add_{product_id}")]
-    ])
 
 def admin_panel_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -145,13 +172,13 @@ async def back_to_main(message: Message):
 
 @dp.message(F.text == "📞 Aloqa")
 async def contact_admin(message: Message):
-    text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/admin_havolasi'>Adminga yozish</a></b>"
+    text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/admin_link_shu_yerga_qoying'>Adminga yozish</a></b>"
     await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-# --- Katalog va Kategoriyalar ---
+# --- Katalog va Kategoriyalar (Bitta Post Mantiqi) ---
 @dp.message(F.text == "🛒 Katalog")
 async def show_catalog(message: Message):
-    await message.answer("Kategoriyani tanlang:", reply_markup=get_categories_menu())
+    await message.answer("Qaysi bo'limdan xarid qilasiz?", reply_markup=get_categories_menu())
 
 CATEGORY_MAP = {
     "💎 Telegram Premium": "premium",
@@ -166,22 +193,45 @@ CATEGORY_MAP = {
 async def show_category_products(message: Message):
     category_slug = CATEGORY_MAP[message.text]
     async with db_pool.acquire() as conn:
-        products = await conn.fetch("SELECT id, name, price FROM products WHERE category = $1", category_slug)
+        # id bo'yicha saralash, shunda siz yozgan ketma-ketlikda chiqadi
+        products = await conn.fetch("SELECT id, name, price FROM products WHERE category = $1 ORDER BY id", category_slug)
     
     if not products:
         await message.answer("Bu bo'limda hozircha mahsulotlar yo'q.")
         return
 
+    # Matn qismini yig'ish
+    text_lines = [f"<b>{message.text}</b>\n"]
     for p in products:
-        text = f"<b>{p['name']}</b>\nNarxi: {p['price']:,} so'm"
-        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=add_to_cart_keyboard(p['id']))
+        text_lines.append(f"▪️ <b>{p['name']}</b> — {p['price']:,} so'm")
+    
+    text = "\n".join(text_lines)
+    
+    # NFT bo'limi uchun maxsus xabar
+    if category_slug == "nft":
+        text += "\n\n<i>Boshqa hamma turdagi NFTlar sizning xohishingizdagi kelishilgan narxda olib beriladi. Buning uchun 'Aloqa' bo'limi orqali admin bilan bog'laning.</i>"
+        
+    text += "\n\n⬇️ <i>Kerakli mahsulotni tanlang:</i>"
+
+    # Inline tugmalarni 2 tadan qilib taxlash (Grid layout)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    row = []
+    for p in products:
+        row.append(InlineKeyboardButton(text=f"🛒 {p['name']}", callback_data=f"add_{p['id']}"))
+        if len(row) == 2:
+            keyboard.inline_keyboard.append(row)
+            row = []
+    if row:
+        keyboard.inline_keyboard.append(row)
+
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 @dp.callback_query(F.data.startswith("add_"))
 async def add_to_cart(call: CallbackQuery):
     product_id = int(call.data.split("_")[1])
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO cart (user_id, product_id) VALUES ($1, $2)", call.from_user.id, product_id)
-    await call.answer("✅ Savatga qo'shildi!", show_alert=False)
+    await call.answer("✅ Savatga qo'shildi! Xaridni yakunlash uchun 'Savatim' bo'limiga o'ting.", show_alert=True)
 
 # --- Savat va To'lov ---
 @dp.message(F.text == "🛍️ Savatim")
@@ -224,7 +274,7 @@ async def process_receipt(message: Message, state: FSMContext):
         f"🔔 <b>Yangi to'lov!</b>\n"
         f"👤 Mijoz: {username}\n\n"
         f"🛒 <b>Mahsulotlar:</b>\n{items_text}\n\n"
-        f"💰 <b>Jami summa:</b> {total:,} so'm"
+        f"💰 <b>Jami:</b> {total:,} so'm"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -236,7 +286,7 @@ async def process_receipt(message: Message, state: FSMContext):
     await message.answer("✅ Chek qabul qilindi. Admin tasdiqlashi bilan xarid amalga oshadi.", reply_markup=get_main_menu())
     await state.clear()
 
-# --- Kabinet va Hamkorlik (Qisqartirilgan, oldingi mantiq saqlangan) ---
+# --- Kabinet va Hamkorlik ---
 @dp.message(F.text == "👤 Kabinet")
 async def show_cabinet(message: Message):
     async with db_pool.acquire() as conn:
@@ -251,7 +301,7 @@ async def show_affiliate(message: Message):
     await message.answer(f"<b>5% Cashback Dasturi</b>\n\n🔗 Havolangiz:\n<code>{ref_link}</code>", parse_mode=ParseMode.HTML)
 
 # ==========================================
-# 6. ADMIN PANEL (Yangi qo'shilgan)
+# 6. ADMIN PANEL
 # ==========================================
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
@@ -259,11 +309,10 @@ async def admin_panel(message: Message):
         return
     await message.answer("👨‍💻 <b>Admin Panel</b>\n\nKerakli bo'limni tanlang:", reply_markup=admin_panel_keyboard(), parse_mode=ParseMode.HTML)
 
-# --- Xabar yuborish ---
 @dp.callback_query(F.data == "admin_broadcast")
 async def ask_broadcast_msg(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID: return
-    await call.message.answer("📝 Barcha foydalanuvchilarga yuboriladigan xabarni kiriting (Rasm/Video qo'shish mumkin):")
+    await call.message.answer("📝 Barcha foydalanuvchilarga yuboriladigan xabarni kiriting:")
     await state.set_state(AdminState.waiting_for_broadcast)
     await call.answer()
 
@@ -271,20 +320,17 @@ async def ask_broadcast_msg(call: CallbackQuery, state: FSMContext):
 async def send_broadcast(message: Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         users = await conn.fetch("SELECT user_id FROM users")
-    
     count = 0
     for u in users:
         try:
             await message.copy_to(chat_id=u['user_id'])
             count += 1
-            await asyncio.sleep(0.05) # Telegram limitlariga tushmaslik uchun
+            await asyncio.sleep(0.05)
         except:
             pass
-            
-    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga muvaffaqiyatli yuborildi.")
+    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga yuborildi.")
     await state.clear()
 
-# --- Narxlarni o'zgartirish ---
 @dp.callback_query(F.data == "admin_prices")
 async def list_prices_for_admin(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID: return
@@ -311,14 +357,11 @@ async def update_price(message: Message, state: FSMContext):
     if not message.text.isdigit():
         await message.answer("Iltimos, faqat raqam kiriting.")
         return
-        
     data = await state.get_data()
     prod_id = data['edit_product_id']
     new_price = int(message.text)
-    
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE products SET price = $1 WHERE id = $2", new_price, prod_id)
-        
     await message.answer("✅ Narx muvaffaqiyatli yangilandi!")
     await state.clear()
 
@@ -333,14 +376,12 @@ async def approve_order(call: CallbackQuery):
     
     await bot.send_message(user_id, "🎉 To'lovingiz tasdiqlandi! Tez orada buyurtmangiz yetkaziladi.")
     
-    # 5% Bonus va Savatni tozalash
     bonus = int(amount * 0.05)
     async with db_pool.acquire() as conn:
         referrer_id = await conn.fetchval("SELECT referrer_id FROM users WHERE user_id = $1", user_id)
         if referrer_id:
             await conn.execute("UPDATE users SET balance = balance + $1 WHERE user_id = $2", bonus, referrer_id)
             await bot.send_message(referrer_id, f"💸 Taklif qilgan do'stingiz xarid qildi! Balansingizga <b>{bonus:,} so'm</b> qo'shildi.", parse_mode=ParseMode.HTML)
-        # Mijoz xarid qilgach savatni tozalash
         await conn.execute("DELETE FROM cart WHERE user_id = $1", user_id)
             
     await call.message.edit_caption(caption=f"{call.message.caption}\n\n✅ <b>TASDIQLANGAN</b>", parse_mode=ParseMode.HTML)
@@ -349,8 +390,7 @@ async def approve_order(call: CallbackQuery):
 async def reject_order(call: CallbackQuery):
     user_id = int(call.data.split("_")[1])
     async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM cart WHERE user_id = $1", user_id) # Savat tozalanadi
-        
+        await conn.execute("DELETE FROM cart WHERE user_id = $1", user_id)
     await bot.send_message(user_id, "❌ To'lovingiz rad etildi. Iltimos, adminga yozing.")
     await call.message.edit_caption(caption=f"{call.message.caption}\n\n❌ <b>RAD ETILGAN</b>", parse_mode=ParseMode.HTML)
 
