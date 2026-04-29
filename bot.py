@@ -12,7 +12,7 @@ from aiogram.enums import ParseMode
 # 1. SOZLAMALAR
 # ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "SIZNING_TOKENINGIZ")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 123456789))
+ADMIN_ID = int(os.getenv("ADMIN_ID", 6734269605))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = Bot(token=BOT_TOKEN)
@@ -206,7 +206,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 @dp.message(F.text == "📞 Aloqa")
 async def contact_admin(message: Message, state: FSMContext):
     await state.clear()
-    text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/admin_havola'>Adminga yozish</a></b>"
+    text = "Savol va takliflar bo'yicha markaziy administratorga murojaat qiling:\n\n👉 <b><a href='t.me/the_797'>Adminga yozish</a></b>"
     await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 # --- Katalog (Oddiy mahsulotlar) ---
