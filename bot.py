@@ -63,9 +63,11 @@ async def init_db():
             )
         ''')
         
-        # Yangi mahsulotlarni qo'shish (faqat birinchi marta ishga tushganda)
+        # DIQQAT: Eski xato ro'yxatni tozalab, yangisini majburiy kiritamiz
         count = await conn.fetchval("SELECT COUNT(*) FROM products")
-        if count == 0:
+        if count < 20: # Agar bazada to'liq ro'yxat bo'lmasa (eski ro'yxatda atigi 7 ta edi)
+            await conn.execute("DELETE FROM products") # Eskilarni o'chirib tashlaymiz
+            
             defaults = [
                 # Premium
                 ('premium', 'Premium 1 oy', 41990),
@@ -106,8 +108,8 @@ async def init_db():
                 ('gift', '💎 100 ⭐️', 22000),
                 ('gift', '🏆 100 ⭐️', 22000),
                 ('gift', '💍 100 ⭐️', 22000),
-                # Boshqalar (Ixtiyoriy oldingi toifalar qoldirildi, xohlasangiz olib tashlaysiz)
-                ('mutolaa', 'Mutolaa 1 oy', 38000),
+                # Boshqalar
+                ('mutolaa', 'Mutolaa 1 oy', 40000),
                 ('steam', 'Steam Balans ($10)', 130000)
             ]
             for cat, name, price in defaults:
